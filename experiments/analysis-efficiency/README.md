@@ -136,3 +136,47 @@ requests continue to deliver the complete inspection. Each run verifies the
 selected artifact's before/after digest and reports no observed OOM or task
 limit events. Source typing and projection improve selected delivery without
 introducing an engine database cache or an external plugin protocol.
+
+## Task-scoped analyzer experiment
+
+[The recorded jq pair](results/jq-presets-20261012.json) explicitly disables
+`Decompiler Switch Analysis` through the existing `REA_GHIDRA_DISABLED_ANALYZERS`
+setting and compares it with the unchanged Ghidra default. Both use the same
+frozen runtime and real jq bytes, one CPU, a fresh ephemeral database and the
+same entry/main question. Completed main dossiers exceed the MCP frame in both
+runs; existing retained native views recover the selected facts, preserving the
+observed transport errors in the reports.
+
+One disabled/default pair takes 174.77/276.23 seconds. Entry and main pseudocode,
+main strings and its block count agree. However, callee `0x40daa0` has 604
+recovered body bytes in eight ranges by default, and 164 bytes in four ranges
+with the same 646-byte span after disabling switch analysis. Equal top-level
+counts do not establish call-graph equivalence. **Keep the production default.**
+Use the existing control only for a caller-selected task whose required facts
+have been checked; no general fast preset is introduced. A separate real
+coreutils/Ghidra probe rejects a nonexistent analyzer before bridge readiness,
+preserves the named failure and closes the session. Source bytes remain unchanged.
+
+`--schemas selected` is a separate SDK 2.3.1 client experiment. It passes the exact
+live named `tools/list` definition to the SDK's public `callTool` option, retaining
+output validation. It does not change REA or the default runner mode. Selected
+definitions compile per call rather than preparing the entire cached catalog;
+report this client effect separately from engine analysis or model behavior.
+
+## Real Codex CLI trials
+
+`agent-trial.py` accepts an explicit frozen runtime and revision, the same
+question templates in `questions/`, and optional explicit provider settings.
+It fingerprints the actual runtime, runs pinned local Codex CLI with a private
+temporary profile, copies only the authentication file with mode 0600, disables
+shell/web/multi-agent tools, and removes copied profile state afterward. Raw
+events and answers remain outside Git. A zero exit code is not a factual grade.
+Review the original tool calls, failed requests, result limitations and answer.
+
+The optional `--enabled-tools FILE` supplies a list of exact names to the
+temporary Codex MCP configuration's `enabled_tools`, as described in the
+[official MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+It leaves the REA catalog and other clients intact. Initial Obsidian trials
+showed parameter-correction attempts and different delivery choices even with
+the same question; filtering alone has not established a cost or quality win.
+Requested model aliases are recorded without inventing a resolved model identity.

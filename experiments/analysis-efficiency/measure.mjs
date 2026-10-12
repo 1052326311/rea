@@ -24,6 +24,8 @@ const { values } = parseArgs({
     providers: { type: "string" },
     output: { type: "string" },
     delivery: { type: "string", default: "complete" },
+    "native-question": { type: "string", default: "entry" },
+    schemas: { type: "string", default: "default" },
   },
 });
 if (
@@ -33,7 +35,10 @@ if (
   !values.output ||
   !isAbsolute(values.path) ||
   !isAbsolute(values.output) ||
-  !["complete", "summary"].includes(values.delivery)
+  !["complete", "summary"].includes(values.delivery) ||
+  !["entry", "entry-and-main"].includes(values["native-question"]) ||
+  !["default", "selected"].includes(values.schemas) ||
+  (values.artifact !== "jq" && values["native-question"] !== "entry")
 )
   throw new Error(
     "Use --revision SHA --artifact ID --path ABS --output NEW_ABS_DIR [--runtime-root ABS] [--providers JSON] [--delivery complete|summary]",
@@ -122,6 +127,7 @@ const transport = new StdioClientTransport({
 });
 const diagnostics = [];
 const calls = [];
+const catalogDefinitions = new Map();
 const pendingRpc = new Map();
 let activeCall;
 const started = performance.now();
@@ -132,6 +138,10 @@ const decode = (reply) =>
     reply.content.find((item) => item.type === "text")?.text ?? "null",
   );
 const call = async (name, arguments_) => {
+  const toolDefinition =
+    values.schemas === "selected" ? catalogDefinitions.get(name) : undefined;
+  if (values.schemas === "selected" && toolDefinition === undefined)
+    throw new Error(`No live advertised definition for ${name}`);
   const began = performance.now();
   const progress = [];
   const rpc = {};
@@ -140,6 +150,7 @@ const call = async (name, arguments_) => {
     const reply = await client.callTool(
       { name, arguments: arguments_ },
       {
+        ...(toolDefinition === undefined ? {} : { toolDefinition }),
         timeout: 600_000,
         onprogress: (update) =>
           progress.push({ elapsed_ms: performance.now() - began, ...update }),
@@ -389,6 +400,73 @@ const workflows = {
       });
       const info = await call("analyze_function", { procedure: address });
       const n = normalized(info);
+      // This exact application entry is materialized in the pinned jq entry's
+      // observed MOV RDI, 0x401f00 instruction, not an original-source claim.
+      let main;
+      const mainEvidenceIds = [];
+      if (values["native-question"] === "entry-and-main") {
+        let sourceId;
+        try {
+          const completed = await call("analyze_function", {
+            procedure: "0x401f00",
+          });
+          sourceId = completed.evidence_id;
+        } catch (error) {
+          const reference =
+            error instanceof ToolFailure &&
+            error.value?.error?.code === "resource_constraint"
+              ? error.value.error.details?.reported_limits?.evidence_reference
+              : undefined;
+          if (reference?.kind !== "retained-evidence") throw error;
+          sourceId = reference.evidence_id;
+        }
+        mainEvidenceIds.push(sourceId);
+        main = {};
+        for (const facet of [
+          "procedure",
+          "pseudocode",
+          "referenced_strings",
+          "callees",
+          "callers",
+          "basic_blocks",
+        ]) {
+          let offset = 0;
+          const items = [];
+          const pages = [];
+          do {
+            const selected = await call("inspect_analysis_view", {
+              source: { kind: "retained-evidence", evidence_id: sourceId },
+              view: {
+                kind: "native",
+                facet,
+                offset,
+                limit:
+                  facet === "pseudocode"
+                    ? 65536
+                    : facet === "basic_blocks"
+                      ? 1
+                      : 64,
+              },
+            });
+            mainEvidenceIds.push(selected.evidence_id);
+            const v = normalized(selected);
+            items.push(v.item);
+            pages.push({
+              coverage: v.coverage,
+              limitations: v.limitations,
+              unknowns: v.unknowns,
+            });
+            if (v.coverage.exhausted || facet === "basic_blocks") break;
+            if (
+              v.coverage.next_offset === null ||
+              v.coverage.next_offset <= offset
+            )
+              throw new Error("Native view did not advance");
+            offset = v.coverage.next_offset;
+          } while (true);
+          main[facet] = { items, pages };
+        }
+      }
       return {
         artifact_sha256: targetSha(info),
         entry_address: address,
@@ -397,7 +475,13 @@ const workflows = {
         pseudocode_prefix: n.pseudocode.slice(0, 512),
         caller_count: n.callers.length,
         callee_count: n.callees.length,
-        evidence_ids: [containing.evidence_id, info.evidence_id],
+        ...(main === undefined ? {} : { main }),
+        analysis_profile: info.analysis_profile,
+        evidence_ids: [
+          containing.evidence_id,
+          info.evidence_id,
+          ...mainEvidenceIds,
+        ],
       };
     } finally {
       await call("close_binary", {});
@@ -440,6 +524,11 @@ try {
     cursor = page.nextCursor;
   } while (cursor !== undefined);
   catalogMs = performance.now() - catalogStarted;
+  for (const tool of tools) {
+    if (catalogDefinitions.has(tool.name))
+      throw new Error("Duplicate advertised tool name");
+    catalogDefinitions.set(tool.name, tool);
+  }
   catalogBytes = Buffer.byteLength(JSON.stringify(tools));
   catalogInputBytes = Buffer.byteLength(
     JSON.stringify(
@@ -487,6 +576,8 @@ const report = {
   artifact_sha256: inputSha,
   artifact_sha256_after: finalInputSha,
   delivery: values.delivery,
+  sdk_schema_mode: values.schemas,
+  native_question: values.artifact === "jq" ? values["native-question"] : null,
   provider_settings_sha256: sha(JSON.stringify(selectedProviders)),
   ...fingerprints,
   node_version: process.version,
