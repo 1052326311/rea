@@ -196,6 +196,8 @@ try {
       glueSource,
       `\uFEFF${glueSource}`,
       `\uFEFF\n${glueSource}`,
+      `#!/usr/bin/env node\n${glueSource}`,
+      `\uFEFF#!/usr/bin/env node\n${glueSource}`,
     ];
     const gluePaths = glueSources.map((_, index) =>
       join(fixtureRoot, `glue-${index}.js`),
