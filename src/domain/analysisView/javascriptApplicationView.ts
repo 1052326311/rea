@@ -249,6 +249,10 @@ export const projectJavaScriptApplicationView = (
     );
   if (view.kind === "inventory")
     return err(jsIncompatible("Inventory views require artifact Evidence."));
+  if (view.kind === "wasm")
+    return err(
+      jsIncompatible("WASM views require inspect_wasm_artifact Evidence."),
+    );
   if (view.kind === "summary")
     return ok({
       kind: "summary",

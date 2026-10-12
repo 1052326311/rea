@@ -31,6 +31,12 @@ import { projectBinaryLayoutView } from "./binaryLayoutView.js";
 import { projectJavaScriptApplicationView } from "./javascriptApplicationView.js";
 import { projectNativeFunctionView } from "./nativeFunctionView.js";
 import { projectArtifactInventoryView } from "./artifactInventoryView.js";
+import {
+  projectWasmArtifactView,
+  wasmViewRequestSchema,
+  wasmViewItemSchema,
+  wasmSummarySchema,
+} from "./wasmArtifactView.js";
 
 /** Public name of the selected-view workflow. */
 export const INSPECT_ANALYSIS_VIEW_OPERATION = "inspect_analysis_view" as const;
@@ -141,6 +147,7 @@ export const analysisViewRequestSchema = z.discriminatedUnion("kind", [
   pageViewSchema,
   nativeViewSchema,
   inventoryViewSchema,
+  wasmViewRequestSchema,
 ]);
 
 /** Inline Evidence or an exact same-session retained reference. */
@@ -244,6 +251,7 @@ const viewResultBase = {
     "analyze_function",
     "inspect_artifact",
     "inventory_artifact",
+    "inspect_wasm_artifact",
   ]),
   parent_digest: digestSchema,
   view_digest: digestSchema,
@@ -274,6 +282,7 @@ export const analysisViewResultSchema = z.discriminatedUnion("kind", [
       layoutSummarySchema,
       javascriptSummarySchema,
       inventorySummarySchema,
+      wasmSummarySchema,
     ]),
   }),
   z.strictObject({
@@ -299,6 +308,12 @@ export const analysisViewResultSchema = z.discriminatedUnion("kind", [
     view: nativeViewSchema,
     procedure_address: z.string().nullable(),
     item: jsonValueSchema,
+    ...viewResultBase,
+  }),
+  z.strictObject({
+    kind: z.literal("wasm"),
+    view: wasmViewRequestSchema,
+    item: wasmViewItemSchema,
     ...viewResultBase,
   }),
   z.strictObject({
@@ -357,7 +372,8 @@ export type UnsignedAnalysisView =
   | Omit<
       Extract<AnalysisViewResult, { readonly kind: "inventory" }>,
       "view_digest"
-    >;
+    >
+  | Omit<Extract<AnalysisViewResult, { readonly kind: "wasm" }>, "view_digest">;
 
 /** Attach the content digest that must change when projected bytes change. */
 export const sealAnalysisView = (
@@ -402,7 +418,7 @@ const unsupportedParent = (
   new AnalysisUnsupportedTargetError(
     INSPECT_ANALYSIS_VIEW_OPERATION,
     parentArtifactPath(parent),
-    `Parent Evidence operation ${JSON.stringify(parent.operation)} does not support analysis views. Use completed binary layout, JavaScript application, native function, or artifact inventory/inspection Evidence.`,
+    `Parent Evidence operation ${JSON.stringify(parent.operation)} does not support analysis views. Use completed binary layout, JavaScript application, native function, artifact inventory/inspection, or WASM Evidence.`,
   );
 
 const parentArtifactPath = (parent: AnalysisViewParent): string => {
@@ -483,6 +499,10 @@ export const projectAnalysisView = (
         ),
       );
     const projected = projectNativeFunctionView(parent, native.data, view);
+    return projected.ok ? ok(sealAnalysisView(projected.value)) : projected;
+  }
+  if (parent.operation === "inspect_wasm_artifact") {
+    const projected = projectWasmArtifactView(parent, view);
     return projected.ok ? ok(sealAnalysisView(projected.value)) : projected;
   }
   if (

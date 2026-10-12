@@ -1,5 +1,5 @@
 import type { WasmArtifactService } from "../application/wasm/WasmArtifactService.js";
-import { createWasmArtifactService } from "../composition/wasm.js";
+import { wasmArtifactModule } from "../composition/wasm.js";
 import { registerWasmTools } from "./registerWasmTools.js";
 import { snapshotEnvironment } from "../process/snapshotEnvironment.js";
 import { createPeResourcesService } from "../composition/binaryDiagnostics.js";
@@ -242,8 +242,10 @@ export const createServer = (
   );
   const android =
     options.androidAnalysis ?? createAndroidAnalysisProvider(environment);
-  const wasmArtifact =
-    options.wasmArtifact ?? createWasmArtifactService(environment);
+  const wasmArtifact = wasmArtifactModule.create(
+    environment,
+    options.wasmArtifact,
+  );
   const apktool =
     options.apktoolAnalysis ??
     createApktoolResourceAnalysisProvider(environment);
@@ -395,7 +397,7 @@ const registerConfiguredAnalysisTools = (
     withAdmittedAnalysis,
   }: ServerToolContext,
   android: AndroidAnalysisPort,
-  wasmArtifact: WasmArtifactService,
+  wasmArtifact: Pick<WasmArtifactService, "inspect" | "close">,
   jeb: JebAnalysisPort,
   firmwareAnalysis: FirmwareAnalysisService,
 ): void => {

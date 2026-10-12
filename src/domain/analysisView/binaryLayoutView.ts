@@ -160,6 +160,10 @@ export const projectBinaryLayoutView = (
     return err(
       layoutIncompatible("Inventory views require artifact Evidence."),
     );
+  if (view.kind === "wasm")
+    return err(
+      layoutIncompatible("WASM views require inspect_wasm_artifact Evidence."),
+    );
   if (view.kind === "summary")
     return ok({
       kind: "summary",

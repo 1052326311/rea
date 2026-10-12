@@ -454,6 +454,20 @@ unreturned paths are absent. Views carry their own Evidence IDs and preserve
 links to the original parent; complete producer output and historical inline
 Evidence input parsing retain their existing shapes.
 
+Completed `inspect_wasm_artifact` Evidence supports a summary and
+`view: {kind: "wasm", facet: "exports", offset: 0, limit: 64}`. Other facets
+are `sections`, `imports`, `candidates`, `glue`, `wat`, `headers`, `details`, and
+the singleton `tool_profile` (offset 0). Arrays retain original WABT forms and
+records. Text facets page by UTF-16 code units and preserve complete Unicode
+characters. Summaries report the selected artifact's identity, validation,
+available counts, decoded WAT digest/length and exact tool profile. Runtime
+execution and network acquisition remain `not-performed`. A valid WAT digest
+is checked at the owning model boundary for current output and portable input.
+The original producer still returns complete Evidence by default. When its
+complete MCP reply exceeds the frame, use the exact reported retained
+reference with these views, or export the complete source. Views do not run
+WABT again and do not turn decoded WAT into original source.
+
 `trace_application_feature`, `trace_javascript_semantics`,
 `compare_application_versions`, `compare_source_to_bundle`, and
 `compare_javascript_export_shapes` accept complete inline application Evidence
