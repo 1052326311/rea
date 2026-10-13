@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { createTestTempDirectory } from "../../tests/fixtures/temporaryDirectory.js";
 import { WabtArtifactProvider } from "./WabtArtifactProvider.js";
+import { wasmArtifactSchema } from "../domain/wasm/wasmArtifact.js";
 import { PrivateRuntimeRoot } from "../process/PrivateRuntimeRoot.js";
 import { PrivateRuntimeRootUnavailableError } from "../process/PrivateRuntimeRootUnavailableError.js";
 import { spawnOwnedProviderProcess } from "../process/ProviderProcess.js";
@@ -394,7 +395,7 @@ it.each([
     { signal: controller.signal },
   );
   if (mode === "success" && result.ok) {
-    const glue = result.value.result.glue;
+    const glue = wasmArtifactSchema.parse(result.value.result).glue;
     expect(glue).toHaveLength(glueSources.length);
     for (const [index, source] of glueSources.entries()) {
       expect(glue[index]).toMatchObject({
