@@ -271,6 +271,35 @@ it.each([false, true])(
     });
   },
 );
+const assertGlueObservations = (
+  value: unknown,
+  inputs: readonly { readonly path: string; readonly source: string }[],
+  selectedPath: string,
+): void => {
+  const glue = wasmArtifactSchema.parse(value).glue;
+  expect(glue).toHaveLength(inputs.length);
+  for (const [index, { path, source }] of inputs.entries()) {
+    expect(glue[index]).toMatchObject({
+      artifact: {
+        path,
+        sha256: createHash("sha256").update(source).digest("hex"),
+        bytes: Buffer.byteLength(source),
+      },
+      parse_status: "complete",
+      references: [
+        {
+          value: "./selected.wasm",
+          line: source.includes("\n") ? 2 : 1,
+          column: source.startsWith("\uFEFFfetch") ? 7 : 6,
+          candidate_paths: [selectedPath],
+          association: "local-path-candidate",
+          evidence_kind: "static-literal",
+        },
+      ],
+    });
+  }
+};
+
 it.each([
   "success",
   "invalid",
@@ -372,7 +401,7 @@ it.each([
     },
   );
   const literal = 'fetch("./selected.wasm");';
-  const glueSources =
+  const glueInputs = (
     mode === "success"
       ? [
           literal,
@@ -381,43 +410,24 @@ it.each([
           `#!/usr/bin/env node\n${literal}`,
           `\uFEFF#!/usr/bin/env node\n${literal}`,
         ]
-      : [];
-  const gluePaths = glueSources.map((_, index) =>
-    join(selectedRoot, `glue-${index}.js`),
-  );
+      : []
+  ).map((source, index) => ({
+    path: join(selectedRoot, `glue-${index}.js`),
+    source,
+  }));
   await Promise.all(
-    gluePaths.map((gluePath, index) =>
-      writeFile(gluePath, glueSources[index]!),
-    ),
+    glueInputs.map(({ path, source }) => writeFile(path, source)),
   );
   const result = await provider.inspect(
-    { path, glue_paths: gluePaths, candidate_paths: [] },
+    {
+      path,
+      glue_paths: glueInputs.map(({ path }) => path),
+      candidate_paths: [],
+    },
     { signal: controller.signal },
   );
-  if (mode === "success" && result.ok) {
-    const glue = wasmArtifactSchema.parse(result.value.result).glue;
-    expect(glue).toHaveLength(glueSources.length);
-    for (const [index, source] of glueSources.entries()) {
-      expect(glue[index]).toMatchObject({
-        artifact: {
-          path: gluePaths[index],
-          sha256: createHash("sha256").update(source).digest("hex"),
-          bytes: Buffer.byteLength(source),
-        },
-        parse_status: "complete",
-        references: [
-          {
-            value: "./selected.wasm",
-            line: source.includes("\n") ? 2 : 1,
-            column: source.startsWith("\uFEFFfetch") ? 7 : 6,
-            candidate_paths: [path],
-            association: "local-path-candidate",
-            evidence_kind: "static-literal",
-          },
-        ],
-      });
-    }
-  }
+  if (mode === "success" && result.ok)
+    assertGlueObservations(result.value.result, glueInputs, path);
   assertModeOutcome(mode, result, path);
   if (mode === "cleanup") {
     await assertCleanupRecovery({
