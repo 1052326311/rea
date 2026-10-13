@@ -2,7 +2,10 @@ import { dirname } from "node:path";
 import { realpath } from "node:fs/promises";
 
 import type { ExecutionOptions } from "../AnalysisProvider.js";
-import type { ElectronActiveObservationPort } from "./ElectronActiveObservationPort.js";
+import type {
+  CanonicalElectronActiveObservationInput,
+  ElectronActiveObservationPort,
+} from "./ElectronActiveObservationPort.js";
 import {
   AnalysisCapabilityUnavailableError,
   AnalysisInputError,
@@ -11,74 +14,68 @@ import {
 import type { AnalysisError } from "../../domain/analysisErrorBase.js";
 import type { Evidence } from "../../domain/evidence.js";
 import type { ElectronActiveObservationInput } from "../../domain/javascript/electronActiveObservation.js";
-import { err, type Result } from "../../domain/result.js";
+import { err, ok, type Result } from "../../domain/result.js";
 import { createElectronActiveEvidence } from "./ElectronActiveEvidence.js";
 
 const OPERATION = "capture_electron_scenario" as const;
 const PROVIDER_ID = "rea-playwright-electron-active";
-type CanonicalElectronActiveObservationInput =
-  ElectronActiveObservationInput & {
-    readonly application_root: string;
-  };
+
+const resolveInputPath = async (
+  field: "executable_path" | "application_path" | "application_root",
+  selected: string,
+): Promise<
+  Result<
+    string,
+    { readonly issue: AnalysisInputIssue; readonly cause: unknown }
+  >
+> => {
+  try {
+    return ok(await realpath(selected));
+  } catch (cause: unknown) {
+    return err({
+      issue: {
+        path: [field],
+        reason: "invalid_value",
+        message: `Cannot resolve ${field} ${selected}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      },
+      cause,
+    });
+  }
+};
 
 const canonicalizeInput = async (
   input: ElectronActiveObservationInput,
 ): Promise<Result<CanonicalElectronActiveObservationInput, AnalysisError>> => {
-  const fields = [
-    "executable_path",
-    "application_path",
-    "application_root",
-  ] as const;
-  const paths = await Promise.all(
-    fields.map(async (field) => {
-      const path = input[field];
-      if (path === undefined) return { field, path: undefined };
-      try {
-        return { field, path: await realpath(path) };
-      } catch (cause: unknown) {
-        return {
-          field,
-          cause,
-          issue: {
-            path: [field],
-            reason: "invalid_value",
-            message: `Cannot resolve ${field}: ${cause instanceof Error ? cause.message : String(cause)}`,
-          } satisfies AnalysisInputIssue,
-        };
-      }
-    }),
-  );
-  const issues = paths.flatMap((entry) =>
-    entry.issue === undefined ? [] : [entry.issue],
-  );
-  if (issues.length > 0)
+  const [executable, application, root] = await Promise.all([
+    resolveInputPath("executable_path", input.executable_path),
+    resolveInputPath("application_path", input.application_path),
+    input.application_root === undefined
+      ? Promise.resolve(ok(undefined))
+      : resolveInputPath("application_root", input.application_root),
+  ]);
+  if (!executable.ok || !application.ok || !root.ok) {
+    const failures = [executable, application, root].flatMap((result) =>
+      result.ok ? [] : [result.error],
+    );
     return err(
       new AnalysisInputError(
         OPERATION,
         {
           cause: new AggregateError(
-            paths.flatMap((entry) =>
-              entry.issue === undefined ? [] : [entry.cause],
-            ),
+            failures.map(({ cause }) => cause),
             "Electron paths could not be resolved",
           ),
         },
-        issues,
+        failures.map(({ issue }) => issue),
       ),
     );
-  const executablePath = paths[0]?.path;
-  const applicationPath = paths[1]?.path;
-  if (executablePath === undefined || applicationPath === undefined)
-    throw new Error("Required Electron paths were not canonicalized");
-  return {
-    ok: true,
-    value: {
-      ...input,
-      executable_path: executablePath,
-      application_path: applicationPath,
-      application_root: paths[2]?.path ?? dirname(applicationPath),
-    },
-  };
+  }
+  return ok({
+    ...input,
+    executable_path: executable.value,
+    application_path: application.value,
+    application_root: root.value ?? dirname(application.value),
+  });
 };
 
 /** Canonicalize request paths and execute one provider-owned Electron run. */
