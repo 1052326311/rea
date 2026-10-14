@@ -82,6 +82,7 @@ it
           ),
         );
       let stdout = "";
+      process.exitCode = 0;
       await createCli({}).serve(
         [command, workspace.path("selected.elf"), "--json"],
         {
