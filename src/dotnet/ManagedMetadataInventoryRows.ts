@@ -386,6 +386,7 @@ export const readCustomAttribute = (
     layout,
     value,
     constructor,
+    memberLists,
   );
   const first = argumentsResult.fixed[0];
   return {

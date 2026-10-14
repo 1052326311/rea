@@ -15,6 +15,7 @@ import {
 } from "./ManagedMetadataHeaps.js";
 import type { ManagedMetadataLayout } from "./ManagedMetadataLayout.js";
 import { memberDeclaringTypeRowLookup } from "./ManagedMemberOwnership.js";
+import type { TypeMemberListFacts } from "./ManagedTypeMemberLists.js";
 import {
   managedFailure,
   ManagedReaderFailure,
@@ -25,7 +26,7 @@ type Arguments = NonNullable<
 >;
 type Argument = Arguments["fixed"][number];
 const enumTypes = new WeakMap<
-  ManagedMetadataLayout,
+  TypeMemberListFacts,
   Map<number, AttributeType>
 >();
 
@@ -88,6 +89,7 @@ class AttributeDecoder {
     readonly bytes: Buffer,
     readonly layout: ManagedMetadataLayout,
     readonly blob: Buffer,
+    readonly memberLists: TypeMemberListFacts,
   ) {}
   fail(detail: string): never {
     throw managedFailure(
@@ -179,7 +181,7 @@ class AttributeDecoder {
     };
   }
   localEnum(row: number, name: string): AttributeType {
-    let cached = enumTypes.get(this.layout);
+    let cached = enumTypes.get(this.memberLists);
     const existing = cached?.get(row);
     if (existing !== undefined) return existing;
     const typeRow = metadataRowCursor(this.bytes, this.layout, 2, row);
@@ -189,7 +191,12 @@ class AttributeDecoder {
     const base = typeRow.readIndex(this.layout.codedIndexSize("TypeDefOrRef"));
     if (base === 0 || this.typeIdentity(base).name !== "System.Enum")
       return this.unsupported(`value type ${name} is not a proven local enum`);
-    const owner = memberDeclaringTypeRowLookup(this.bytes, this.layout, 4);
+    const owner = memberDeclaringTypeRowLookup(
+      this.bytes,
+      this.layout,
+      4,
+      this.memberLists,
+    );
     let width: number | undefined;
     for (
       let field = 1;
@@ -224,15 +231,19 @@ class AttributeDecoder {
         return this.unsupported(`enum ${name} has ambiguous value__ fields`);
       width = parsed.shape.element;
     }
+    if (width === undefined)
+      return this.unsupported(
+        `local enum ${name} has no proven owned value__ field`,
+      );
     const type = {
       element: 0x55,
       name,
-      ...(width === undefined ? {} : { enumWidth: width }),
+      enumWidth: width,
     };
     managedDecodeBudget(this.layout).reserve(256, this.offset);
     if (cached === undefined) {
       cached = new Map();
-      enumTypes.set(this.layout, cached);
+      enumTypes.set(this.memberLists, cached);
     }
     cached.set(row, type);
     return type;
@@ -395,10 +406,11 @@ export const decodeCustomAttributeArguments = (
   layout: ManagedMetadataLayout,
   blob: Buffer,
   constructor: string | null,
+  memberLists: TypeMemberListFacts,
 ): Arguments => {
   const fixed: Argument[] = [];
   const named: Arguments["named"] = [];
-  const decoder = new AttributeDecoder(bytes, layout, blob);
+  const decoder = new AttributeDecoder(bytes, layout, blob, memberLists);
   let parameters: readonly ManagedSignatureType[] = [];
   try {
     if (constructor === null)

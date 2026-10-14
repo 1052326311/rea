@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { inspectManagedArtifactBytes } from "./ManagedArtifactInspector.js";
 import {
+  metadataRowOffset,
+  readManagedMetadataLayout,
+} from "./ManagedMetadataLayout.js";
+import { readManagedPeLayout } from "./ManagedPeReader.js";
+import {
   buildManagedMemberPointerFixture,
   managedPeFixtureTarget,
 } from "./ManagedPe.fixture.js";
@@ -151,6 +156,53 @@ describe("signature-owned custom attribute arguments", () => {
       ],
     });
   });
+});
+
+describe("custom attribute enum ownership uncertainty", () => {
+  it.each([0, 4])(
+    "does not derive an enum width from invalid FieldList start %s",
+    (start) => {
+      const bytes = buildManagedMemberPointerFixture({
+        methodPointers: null,
+        fieldPointers: null,
+        enumUnderlyingType: 5,
+        constructorSignature: Buffer.from([0x20, 1, 1, 0x11, 12]),
+        attributeValue: Buffer.from([1, 0, 2, 0, 0]),
+      });
+      const pe = readManagedPeLayout(bytes);
+      if (pe.cli === null) throw new Error("fixture has no CLI header");
+      const { rva, size } = pe.cli.metadata;
+      const layout = readManagedMetadataLayout(
+        bytes,
+        pe.rvaToOffset(rva, size, "cli.metadata"),
+        size,
+      );
+      const offset =
+        metadataRowOffset(layout, 2, 3) +
+        4 +
+        2 * layout.stringIndexSize +
+        layout.codedIndexSize("TypeDefOrRef");
+      if (layout.tableIndexSize(4) === 2) bytes.writeUInt16LE(start, offset);
+      else bytes.writeUInt32LE(start, offset);
+      const result = inspectManagedArtifactBytes(
+        bytes,
+        managedPeFixtureTarget(bytes),
+      );
+      expect(result.attributes[0]?.arguments).toMatchObject({
+        status: "unsupported",
+        reason: expect.stringContaining("no proven owned value__ field"),
+        fixed: [{ status: "unknown", value: null, enum_underlying_type: null }],
+      });
+      expect(result.coverage.issues).toContainEqual(
+        expect.objectContaining({
+          code: "invalid-row",
+          detail: expect.stringContaining(
+            `TypeDef FieldList start ${String(start)}`,
+          ),
+        }),
+      );
+    },
+  );
 });
 
 describe("attribute argument boundaries and unknowns", () => {
