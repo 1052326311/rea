@@ -15,6 +15,7 @@ import {
   readResource,
 } from "./ManagedMetadataInventoryRows.js";
 import { metadataToken } from "./ManagedMetadataHeaps.js";
+import type { TypeMemberListFacts } from "./ManagedTypeMemberLists.js";
 import {
   readManagedValue,
   uniqueManagedParseIssues,
@@ -149,13 +150,22 @@ const readAttributes = (
   bytes: Buffer,
   layout: ManagedMetadataLayout,
   issues: ManagedParseIssue[],
+  memberLists: TypeMemberListFacts,
 ): {
   readonly attributes: readonly CustomAttribute[];
   readonly targetFrameworks: readonly string[];
 } => {
   const attributes = readRows(layout.table(12), (row) =>
     readManagedValue(
-      () => readCustomAttribute(bytes, layout, row, heapExtent(layout), issues),
+      () =>
+        readCustomAttribute(
+          bytes,
+          layout,
+          row,
+          heapExtent(layout),
+          issues,
+          memberLists,
+        ),
       issues,
     ),
   );
@@ -179,8 +189,9 @@ export const readManagedMetadataInventory = (
   bytes: Buffer,
   layout: ManagedMetadataLayout,
   resourceDirectory: ManagedResourceDirectory | null,
+  memberLists: TypeMemberListFacts,
 ): ManagedMetadataInventory => {
-  const issues: ManagedParseIssue[] = [];
+  const issues: ManagedParseIssue[] = [...memberLists.issues];
   validateIdentityTableCounts(layout, issues);
   const module =
     readManagedValue(
@@ -203,6 +214,7 @@ export const readManagedMetadataInventory = (
     bytes,
     layout,
     issues,
+    memberLists,
   );
   return {
     module,
