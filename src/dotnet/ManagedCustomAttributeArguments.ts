@@ -219,7 +219,7 @@ class AttributeDecoder {
         this.layout.blob.size,
       );
       if (fieldName !== "value__" || (flags & 0x10) !== 0) continue;
-      const parsed = fieldSignatureType(blob, this.layout);
+      const parsed = fieldSignatureType(blob, { layout: this.layout });
       if (
         parsed.next !== blob.length ||
         ![4, 5, 6, 7, 8, 9, 10, 11].includes(parsed.shape.element)
@@ -446,7 +446,7 @@ export const decodeCustomAttributeArguments = (
       signatureBlob.length * 256,
       layout.blob.offset,
     );
-    const parsed = methodSignatureTypes(signatureBlob, layout);
+    const parsed = methodSignatureTypes(signatureBlob, { layout });
     if (
       parsed.next !== signatureBlob.length ||
       parsed.result.shape.element !== 1 ||
