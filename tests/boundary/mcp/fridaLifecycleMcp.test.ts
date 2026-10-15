@@ -17,6 +17,7 @@ import type {
   FridaScriptObservation,
 } from "../../../src/application/frida/FridaInstrumentationPort.js";
 import type { EvidenceWriter } from "../../../src/application/investigation/InvestigationRecordPort.js";
+import { expandToolAvailability } from "../../../src/contracts/toolOutputSchemaPrimitives.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
 import type { AnalysisPartialObservation } from "../../../src/domain/analysisErrorBase.js";
 import { AnalysisCancelledError } from "../../../src/domain/analysisErrorCore.js";
@@ -227,6 +228,66 @@ const connectedFixture = async () => {
   return { ...native, manager, session, server, client, start, load };
 };
 
+it.each([false, true])(
+  "declares target execution when closing a spawn (explicit resume: %s)",
+  async (explicitResume) => {
+    const { client, start, controls } = await connectedFixture();
+    const id = await start();
+    expect(controls.resumes).toBe(0);
+    if (explicitResume) {
+      const resumed = await client.callTool({
+        name: "resume_frida_session",
+        arguments: { session_id: id },
+      });
+      expect(resumed.isError).not.toBe(true);
+      expect(controls.resumes).toBe(1);
+    }
+    const closed = await client.callTool({
+      name: "close_frida_session",
+      arguments: { session_id: id },
+    });
+    expect(closed.isError).not.toBe(true);
+    expect(
+      toolContract("close_frida_session").outputSchema.parse(
+        closed.structuredContent,
+      ),
+    ).toMatchObject({
+      target_state: "unknown",
+    });
+    expect(controls.resumes).toBe(1);
+    expect(controls.detachCalls).toBe(1);
+    const tools = (await client.listTools()).tools;
+    const close = tools.find((tool) => tool.name === "close_frida_session");
+    const resume = tools.find((tool) => tool.name === "resume_frida_session");
+    expect(close?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+    });
+    expect(close?.annotations?.destructiveHint).toBe(
+      resume?.annotations?.destructiveHint,
+    );
+    const inventory = await client.callTool({
+      name: "binary_session",
+      arguments: {},
+    });
+    expect(inventory.isError).not.toBe(true);
+    const availability = toolContract("binary_session").outputSchema.parse(
+      inventory.structuredContent,
+    ).result.tool_availability;
+    const advertisedClose = expandToolAvailability(availability).find(
+      (tool) => tool.name === "close_frida_session",
+    );
+    expect(advertisedClose).toMatchObject({
+      effects: {
+        executesForeignCode: true,
+        mutatesTarget: true,
+        mutatesSession: true,
+      },
+      annotations: { destructive: true, read_only: false },
+    });
+  },
+);
+
 type PartialRecording = "acknowledged" | "failed" | "unavailable";
 type PartialObservation = "evidence" | "non-evidence" | "unavailable";
 
@@ -272,11 +333,9 @@ const callPartialFridaLoadError = async (
   const failure =
     partial === "evidence"
       ? new FridaScriptLoadCancelledError(script)
-      : new AnalysisCancelledError("load_frida_script", {
-          ...(partial === "non-evidence"
+      : new AnalysisCancelledError("load_frida_script", (partial === "non-evidence"
             ? { partialObservation: nonEvidencePartialObservation() }
-            : {}),
-        });
+            : {}));
   const provider: FridaInstrumentationPort = {
     async listDevices() {
       return unusedFridaPortMethod();
