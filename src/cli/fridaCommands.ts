@@ -224,7 +224,8 @@ export const registerFridaCommands = (
                   {
                     path: ["argument"],
                     reason: "invalid_value",
-                    message: "--argument is only supported in spawn mode.",
+                    message:
+                      "--argument is only valid in spawn mode; remove it when attaching to a process.",
                   },
                 ],
               ),
