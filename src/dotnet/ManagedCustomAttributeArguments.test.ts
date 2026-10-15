@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as signatureOwner from "./ManagedMemberInspectorCore.js";
 import { decodeCustomAttributeArguments } from "./ManagedCustomAttributeArguments.js";
 import { managedDecodeBudget } from "./ManagedDecodeBudget.js";
 import { readTypeMemberListFacts } from "./ManagedTypeMemberLists.js";
@@ -325,8 +326,8 @@ const prepareDecoder = (
   const facts = readTypeMemberListFacts(bytes, layout);
   return {
     layout,
-    decode: (value: Buffer) =>
-      decodeCustomAttributeArguments(bytes, layout, value, "0x06000001", facts),
+    decode: (value: Buffer, constructor = "0x06000001") =>
+      decodeCustomAttributeArguments(bytes, layout, value, constructor, facts),
   };
 };
 
@@ -375,6 +376,80 @@ describe("attribute enum review regressions", () => {
         named: [{ value: 42, type: name }],
       });
     }
+  });
+});
+
+describe("attribute representation and constructor reuse", () => {
+  it("charges every retained box across repeated attributes before collecting the inventory", () => {
+    const { layout, decode } = prepareDecoder({
+      constructorSignature: Buffer.from([0x20, 1, 1, 28]),
+    });
+    managedDecodeBudget(layout).reserve(63 * 1024 * 1024, null);
+    const value = Buffer.concat([
+      Buffer.from([1, 0]),
+      Buffer.alloc(399, 0x51),
+      Buffer.from([5, 42, 0, 0]),
+    ]);
+    const retained = [];
+    expect(() => {
+      for (let index = 0; index < 32; index++) {
+        const result = decode(value);
+        expect(result.status).toBe("decoded");
+        retained.push(result);
+      }
+    }).toThrow(/representation budget/u);
+    expect(retained.length).toBeGreaterThan(0);
+
+    const scalar = prepareDecoder({
+      constructorSignature: Buffer.from([0x20, 1, 1, 5]),
+    });
+    managedDecodeBudget(scalar.layout).reserve(63 * 1024 * 1024, null);
+    for (let index = 0; index < 32; index++)
+      expect(scalar.decode(Buffer.from([1, 0, 42, 0, 0]))).toMatchObject({
+        status: "decoded",
+        fixed: [{ value: 42 }],
+      });
+  });
+
+  it.each([false, true])(
+    "parses a shared constructor once, including parser failure %s",
+    (malformed) => {
+      const constructorSignature = Buffer.concat([
+        Buffer.from([0x20, 1, 1]),
+        Buffer.alloc(12000, 0x1d),
+        malformed ? Buffer.alloc(0) : Buffer.from([14]),
+      ]);
+      const first = prepareDecoder({ constructorSignature });
+      const second = prepareDecoder({ constructorSignature });
+      const parse = vi.spyOn(signatureOwner, "methodSignatureTypes");
+      try {
+        const value = Buffer.from([1, 0, 0, 0]);
+        for (let index = 0; index < 64; index++)
+          expect(first.decode(value).status).toBe(
+            malformed ? "malformed" : "unsupported",
+          );
+        expect(parse).toHaveBeenCalledTimes(1);
+        // Distinct constructor identities and inspections cannot share facts.
+        first.decode(value, "0x0a000001");
+        expect(parse).toHaveBeenCalledTimes(2);
+        second.decode(value);
+        expect(parse).toHaveBeenCalledTimes(3);
+      } finally {
+        parse.mockRestore();
+      }
+    },
+  );
+
+  it("does not release a caller's live reservation after decoding an attribute", () => {
+    const { layout, decode } = prepareDecoder({
+      constructorSignature: Buffer.from([0x20, 1, 1, 5]),
+    });
+    const budget = managedDecodeBudget(layout);
+    budget.admitTransient(60 * 1024 * 1024, null);
+    expect(decode(Buffer.from([1, 0, 42, 0, 0])).status).toBe("decoded");
+    expect(() => budget.reserve(8 * 1024 * 1024, null)).toThrow(
+      /representation budget/u,
+    );
   });
 });
 describe("serialized enum identities", () => {

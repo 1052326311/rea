@@ -31,6 +31,13 @@ interface AttributeType {
   readonly enumWidth?: number;
 }
 
+// Layouts are immutable inspection identities. Retained signature shapes and
+// failures spend the shared budget once, rather than resetting work per row.
+const constructorFacts = new WeakMap<
+  ManagedMetadataLayout,
+  Map<string, readonly ManagedSignatureType[] | ManagedReaderFailure>
+>();
+
 const primitiveNames = new Map<number, string>([
   [2, "bool"],
   [3, "char"],
@@ -134,6 +141,68 @@ class AttributeDecoder {
     } catch {
       return this.fail("invalid UTF-8 custom attribute string");
     }
+  }
+  parameters(constructor: string): readonly ManagedSignatureType[] {
+    let facts = constructorFacts.get(this.layout);
+    const cached = facts?.get(constructor);
+    if (cached instanceof ManagedReaderFailure) throw cached;
+    if (cached !== undefined) return cached;
+    managedDecodeBudget(this.layout).reserve(256, this.offset);
+    if (facts === undefined) {
+      facts = new Map();
+      constructorFacts.set(this.layout, facts);
+    }
+    try {
+      const parameters = this.readParameters(constructor);
+      facts.set(constructor, parameters);
+      return parameters;
+    } catch (cause: unknown) {
+      if (cause instanceof ManagedReaderFailure) facts.set(constructor, cause);
+      throw cause;
+    }
+  }
+  readParameters(constructor: string): readonly ManagedSignatureType[] {
+    const table = Number.parseInt(constructor.slice(2, 4), 16);
+    const row = Number.parseInt(constructor.slice(4), 16);
+    const cursor = metadataRowCursor(this.bytes, this.layout, table, row);
+    if (table === 6) {
+      cursor.readUInt32();
+      cursor.readUInt16();
+      cursor.readUInt16();
+    } else if (table === 10)
+      cursor.readIndex(this.layout.codedIndexSize("MemberRefParent"));
+    else
+      this.unsupported(
+        "custom attribute constructor must be MethodDef or MemberRef",
+      );
+    const name = readMetadataString(
+      this.bytes,
+      this.layout,
+      cursor.readIndex(this.layout.stringIndexSize),
+      this.layout.strings.size,
+    );
+    if (name !== ".ctor")
+      this.unsupported("custom attribute member is not a constructor");
+    const signatureBlob = readMetadataBlob(
+      this.bytes,
+      this.layout,
+      cursor.readIndex(this.layout.blobIndexSize),
+      this.layout.blob.size,
+    );
+    managedDecodeBudget(this.layout).reserve(
+      signatureBlob.length * 256,
+      this.layout.blob.offset,
+    );
+    const parsed = methodSignatureTypes(signatureBlob, { layout: this.layout });
+    if (
+      parsed.next !== signatureBlob.length ||
+      parsed.result.shape.element !== 1 ||
+      parsed.header.first !== 0x20
+    )
+      this.unsupported(
+        "attribute constructor must have a complete instance default void signature",
+      );
+    return parsed.parameters.map(({ shape }) => shape);
   }
   typeIdentity(operand: number) {
     return attributeEnumFacts(
@@ -269,6 +338,7 @@ class AttributeDecoder {
       return this.unsupported("attribute value exceeds JSON nesting capacity");
     if (type.element === 14 || type.element === 0x50) return this.string();
     if (type.element === 28) {
+      managedDecodeBudget(this.layout).reserve(256, this.offset);
       const boxed = this.taggedType();
       return {
         type: boxed.name,
@@ -397,47 +467,7 @@ export const decodeCustomAttributeArguments = (
   try {
     if (constructor === null)
       return decoder.unsupported("custom attribute constructor is unresolved");
-    const table = Number.parseInt(constructor.slice(2, 4), 16);
-    const row = Number.parseInt(constructor.slice(4), 16);
-    const cursor = metadataRowCursor(bytes, layout, table, row);
-    if (table === 6) {
-      cursor.readUInt32();
-      cursor.readUInt16();
-      cursor.readUInt16();
-    } else if (table === 10)
-      cursor.readIndex(layout.codedIndexSize("MemberRefParent"));
-    else
-      decoder.unsupported(
-        "custom attribute constructor must be MethodDef or MemberRef",
-      );
-    const name = readMetadataString(
-      bytes,
-      layout,
-      cursor.readIndex(layout.stringIndexSize),
-      layout.strings.size,
-    );
-    if (name !== ".ctor")
-      decoder.unsupported("custom attribute member is not a constructor");
-    const signatureBlob = readMetadataBlob(
-      bytes,
-      layout,
-      cursor.readIndex(layout.blobIndexSize),
-      layout.blob.size,
-    );
-    managedDecodeBudget(layout).admitTransient(
-      signatureBlob.length * 256,
-      layout.blob.offset,
-    );
-    const parsed = methodSignatureTypes(signatureBlob, { layout });
-    if (
-      parsed.next !== signatureBlob.length ||
-      parsed.result.shape.element !== 1 ||
-      parsed.header.first !== 0x20
-    )
-      decoder.unsupported(
-        "attribute constructor must have a complete instance default void signature",
-      );
-    parameters = parsed.parameters.map(({ shape }) => shape);
+    parameters = decoder.parameters(constructor);
     if (decoder.uint16() !== 1) decoder.fail("invalid custom attribute prolog");
     for (const parameter of parameters)
       decoder.argument(
@@ -500,7 +530,5 @@ export const decodeCustomAttributeArguments = (
       fixed,
       named,
     };
-  } finally {
-    managedDecodeBudget(layout).releaseTransient();
   }
 };
