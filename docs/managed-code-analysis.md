@@ -642,6 +642,8 @@ remain present even when decoding cannot finish. Unknown fixed values have
 `status: "unknown"` and a reason; offsets after an unknown-width argument are
 null rather than guessed. Known facts preceding an error remain available.
 
+Local enum names include their enclosing types (`Outer+Mode`), with ambiguous or externally assembly-qualified names left unresolved. Enum name and owned-field indexes are shared within one inspection, and field signature parsing shares its resource budget. When a value cannot be decoded, the argument retains its original blob offset and known type; named entries also retain their name and field/property kind.
+
 A local enum's `enum_underlying_type` records the primitive width and
 `kind: "derived"`, obtained from its owned `value__` field.
 External enum widths are unknown: decoding stops instead of assuming Int32 or

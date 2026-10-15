@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { decodeCustomAttributeArguments } from "./ManagedCustomAttributeArguments.js";
+import { managedDecodeBudget } from "./ManagedDecodeBudget.js";
+import { readTypeMemberListFacts } from "./ManagedTypeMemberLists.js";
 import { inspectManagedArtifactBytes } from "./ManagedArtifactInspector.js";
 import {
   metadataRowOffset,
@@ -289,5 +292,250 @@ describe("attribute argument boundaries and unknowns", () => {
       status: "unsupported",
       reason: expect.stringContaining("nesting capacity"),
     });
+  });
+});
+
+const serializedString = (value: string): Buffer => {
+  const bytes = Buffer.from(value);
+  const prefix =
+    bytes.length < 128
+      ? Buffer.from([bytes.length])
+      : Buffer.from([0x80 | (bytes.length >> 8), bytes.length & 0xff]);
+  return Buffer.concat([prefix, bytes]);
+};
+const namedEnum = (name: string, value: Buffer): Buffer =>
+  Buffer.concat([
+    Buffer.from([1, 0, 1, 0, 0x54, 0x55]),
+    serializedString(name),
+    serializedString("Mode"),
+    value,
+  ]);
+const prepareDecoder = (
+  options: Parameters<typeof buildManagedMemberPointerFixture>[0],
+) => {
+  const bytes = buildManagedMemberPointerFixture(options);
+  const pe = readManagedPeLayout(bytes);
+  if (pe.cli === null) throw new Error("fixture has no CLI header");
+  const { rva, size } = pe.cli.metadata;
+  const layout = readManagedMetadataLayout(
+    bytes,
+    pe.rvaToOffset(rva, size, "cli.metadata"),
+    size,
+  );
+  const facts = readTypeMemberListFacts(bytes, layout);
+  return {
+    layout,
+    decode: (value: Buffer) =>
+      decodeCustomAttributeArguments(bytes, layout, value, "0x06000001", facts),
+  };
+};
+
+describe("attribute enum review regressions", () => {
+  it("admits an enum field signature before parsing while retaining the constructor budget", () => {
+    const { layout, decode } = prepareDecoder({
+      fieldPointers: null,
+      methodPointers: null,
+      enumUnderlyingType: 5,
+      constructorSignature: Buffer.from([0x20, 1, 1, 0x11, 12]),
+      types: [
+        { name: "A" },
+        {
+          name: "B",
+          enumUnderlyingType: 5,
+          fieldSignature: Buffer.concat([
+            Buffer.from([6]),
+            Buffer.alloc(30000, 0x1d),
+            Buffer.from([5]),
+          ]),
+        },
+      ],
+    });
+    managedDecodeBudget(layout).reserve(60 * 1024 * 1024, null);
+    expect(() => decode(Buffer.from([1, 0, 2, 0, 0]))).toThrow(
+      /representation budget/u,
+    );
+  });
+  it("reuses enum-name and owned-field indexes for repeated attributes within one budget", () => {
+    const names = Array.from(
+      { length: 128 },
+      (_, index) => `Enum${index}_${"x".repeat(150)}`,
+    );
+    const { layout, decode } = prepareDecoder({
+      fieldPointers: null,
+      methodPointers: null,
+      typeReferenceName: "Enum",
+      constructorSignature: Buffer.from([0x20, 0, 1]),
+      types: names.map((name) => ({ name, enumUnderlyingType: 5 })),
+    });
+    managedDecodeBudget(layout).reserve(60 * 1024 * 1024, null);
+    for (let index = 0; index < 64; index++) {
+      const name = `Fixture.${names[127 - index]}`;
+      expect(decode(namedEnum(name, Buffer.from([42])))).toMatchObject({
+        status: "decoded",
+        named: [{ value: 42, type: name }],
+      });
+    }
+  });
+});
+describe("serialized enum identities", () => {
+  it.each([
+    ["Fixture.Outer+Mode", [42], "uint8"],
+    ["Fixture.Mode", [42, 0, 0, 0], "int32"],
+  ])(
+    "resolves serialized enum identity %s independently of a nested name collision",
+    (name, value, width) => {
+      expect(
+        attributes({
+          fieldPointers: null,
+          methodPointers: null,
+          typeReferenceName: "Enum",
+          constructorSignature: Buffer.from([0x20, 0, 1]),
+          types: [
+            { name: "Mode", enumUnderlyingType: 5, enclosingRow: 3 },
+            { name: "Outer" },
+            { name: "Mode", enumUnderlyingType: 8 },
+          ],
+          attributeValue: namedEnum(name, Buffer.from(value)),
+        })?.arguments,
+      ).toMatchObject({
+        status: "decoded",
+        named: [
+          {
+            type: name,
+            value: 42,
+            enum_underlying_type: { value: width, kind: "derived" },
+          },
+        ],
+      });
+    },
+  );
+  it.each(["Fixture.Mode", "Fixture.Mode, Foreign.Assembly"])(
+    "does not guess a width for ambiguous or external identity %s",
+    (name) => {
+      expect(
+        attributes({
+          fieldPointers: null,
+          methodPointers: null,
+          typeReferenceName: "Enum",
+          constructorSignature: Buffer.from([0x20, 0, 1]),
+          types: [
+            { name: "Mode", enumUnderlyingType: 5 },
+            { name: "Mode", enumUnderlyingType: 8 },
+          ],
+          attributeValue: namedEnum(name, Buffer.from([42, 0, 0, 0])),
+        })?.arguments,
+      ).toMatchObject({
+        status: "unsupported",
+        named: [
+          {
+            type: name,
+            name: "Mode",
+            kind: "property",
+            status: "unknown",
+            value: null,
+          },
+        ],
+      });
+    },
+  );
+  it.each([
+    [
+      "enum array",
+      [0x1d, 0x11, 5],
+      Buffer.from([1, 0, 0, 0, 42]),
+      "System.Attribute[]",
+    ],
+    [
+      "boxed enum",
+      [28],
+      Buffer.concat([
+        Buffer.from([0x55]),
+        serializedString("External.Mode"),
+        Buffer.from([42]),
+      ]),
+      "object",
+    ],
+  ])(
+    "keeps the original start and declared type of an unsupported %s",
+    (_label, signature, value, type) => {
+      expect(
+        attributes({
+          constructorSignature: Buffer.from([0x20, 1, 1, ...signature]),
+          attributeValue: Buffer.concat([
+            Buffer.from([1, 0]),
+            value,
+            Buffer.from([0, 0]),
+          ]),
+        })?.arguments,
+      ).toMatchObject({
+        status: "unsupported",
+        fixed: [{ blob_offset: 2, type, status: "unknown" }],
+      });
+    },
+  );
+  it("retains a malformed named value and previously decoded named facts", () => {
+    expect(
+      attributes({
+        constructorSignature: Buffer.from([0x20, 0, 1]),
+        attributeValue: Buffer.concat([
+          Buffer.from([1, 0, 2, 0, 0x53, 2]),
+          serializedString("Enabled"),
+          Buffer.from([1, 0x54, 8]),
+          serializedString("Capacity"),
+          Buffer.from([42]),
+        ]),
+      })?.arguments,
+    ).toMatchObject({
+      status: "malformed",
+      named: [
+        { name: "Enabled", kind: "field", value: true, status: "decoded" },
+        {
+          name: "Capacity",
+          kind: "property",
+          type: "int32",
+          status: "unknown",
+          value: null,
+          reason: expect.stringContaining("truncated"),
+        },
+      ],
+    });
+  });
+});
+
+describe("serialized enum name boundaries", () => {
+  it.each([
+    ["Fixture.Mode\\+Kind", "Mode+Kind", "decoded"],
+    ["Fixture.Mode+Kind", "Mode+Kind", "unsupported"],
+    ["Fixture.Mode\\,Foreign", "Mode,Foreign", "decoded"],
+    ["Fixture.Mode,Foreign", "Mode,Foreign", "unsupported"],
+  ])(
+    "separates serialized punctuation %s from metadata identifiers",
+    (serialized, name, status) => {
+      expect(
+        attributes({
+          fieldPointers: null,
+          methodPointers: null,
+          typeReferenceName: "Enum",
+          types: [{ name, enumUnderlyingType: 5 }, { name: "Other" }],
+          constructorSignature: Buffer.from([0x20, 0, 1]),
+          attributeValue: namedEnum(serialized, Buffer.from([42])),
+        })?.arguments,
+      ).toMatchObject({ status });
+    },
+  );
+  it("leaves cyclic nesting unknown", () => {
+    expect(
+      attributes({
+        fieldPointers: null,
+        methodPointers: null,
+        typeReferenceName: "Enum",
+        types: [
+          { name: "Mode", enumUnderlyingType: 5, enclosingRow: 3 },
+          { name: "Outer", enclosingRow: 2 },
+        ],
+        constructorSignature: Buffer.from([0x20, 0, 1]),
+        attributeValue: namedEnum("Fixture.Outer+Mode", Buffer.from([42])),
+      })?.arguments,
+    ).toMatchObject({ status: "unsupported" });
   });
 });
