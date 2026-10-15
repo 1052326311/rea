@@ -161,8 +161,6 @@ it("forwards every selected spawn argument through the CLI and shared service", 
   const cli = createCli({}, undefined, provider);
   let stdout = "";
   let exitCode = 0;
-  stdout = "";
-  exitCode = 0;
   await cli.serve(
     [
       "instrument-with-frida",
