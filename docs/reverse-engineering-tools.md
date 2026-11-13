@@ -136,6 +136,24 @@ rea debug-with-rizin --inferior-tty /dev/pts/7 ./program dr
 rea execute-rizin-command ./program iI
 ```
 
+### Interpreting one-shot results
+
+REA preserves the selected command's output rather than parsing Rizin diagnostics.
+Read these fields together before treating the output as an analysis result:
+
+| Field                           | What it establishes                                                                                     |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `completion_status: "complete"` | Process completion was observed, not that Rizin accepted the command or answered the analysis question. |
+| `exit_code: 0`                  | The process returned zero; this does not independently validate the selected Rizin command.             |
+| `stdout` and `stderr`           | The retained response and diagnostics. Empty stdout alone does not establish an empty query result.     |
+
+For example, if stderr says `ERROR: Command 'axffj' does not exist.`, the command
+was rejected even if the process returned zero and completion is `complete`.
+Consult the installed Rizin version's command help before selecting a replacement;
+do not infer that the artifact has no matching references from that empty stdout.
+Nonempty stderr alone is not a universal failure test either, since it can contain
+warnings. A nonzero process exit is also retained as an observed command result.
+
 Captured stdout and stderr use the same `max_output_bytes` (CLI: `--max-output-bytes`) admission and recovery described above, default 16 MiB. One-shot commands independently use `command_timeout_ms`. Raising output admission cannot recover an earlier capture; command effects and cleanup must be checked before another invocation.
 
 ### Decoder and map inputs
