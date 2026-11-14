@@ -799,11 +799,13 @@ The Hopper launcher action used by REA creates a document from an executable;
 its supported command-line interface does not attach to an already-open
 document. While another live REA session owns the same target and loader
 profile, a second session reports the owning run ID instead of opening a
-duplicate document. On macOS, closing the owning REA session releases this guard;
-Hopper keeps its document open. A later REA session can therefore open another
-document for the same target. REA does not currently identify, focus, or reuse
-that existing GUI document, and the supported launcher exposes no attach or
-reuse action for it.
+duplicate document. Normal MCP server shutdown releases this guard and leaves
+ordinary macOS Hopper documents open. A later REA session can therefore open
+another document for the same target. REA does not currently identify, focus, or
+reuse that existing GUI document, and the supported launcher exposes no attach
+or reuse action for it. Explicitly closing or switching a target instead closes
+its bound document. Documents backed by REA-prepared temporary images close even
+on MCP exit, as described below.
 
 REA currently declines saved Hopper database (`.hop`) targets on macOS because
 the native `open database` launch route does not run REA's bridge script. To
@@ -1074,9 +1076,12 @@ An external GUI's helper exit does not establish that the GUI itself exited.
 For cursor navigation, string decoding, symbol-name limits, and regex matching,
 see [Hopper analysis behavior](../guides/native/native-investigation.md#hopper-analysis-behavior).
 
-Closing or switching a target closes its bound Hopper document, shuts down REA's
-bridge and removes its temporary socket directory. The macOS Hopper application
-and unrelated documents remain open; the owned Linux demo application stops.
+Explicitly closing or switching a target closes its bound Hopper document,
+shuts down REA's bridge and removes its temporary socket directory. Normal MCP
+server shutdown instead leaves ordinary macOS Hopper documents open; documents
+backed by REA-prepared temporary images close as described above. The macOS Hopper
+application and unrelated documents remain open; the owned Linux demo application
+stops during cleanup.
 A `cleanup_incomplete`
 result identifies resources whose cleanup could not be verified.
 REA retains unresolved cleanup ownership and any confirmed shutdown phases.
